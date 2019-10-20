@@ -1,35 +1,37 @@
 #!/usr/bin/python
 
-# code taken from https://pycryptodome.readthedocs.io/en/latest/src/cipher/chacha20_poly1305.html
+# code examples inspired from https://pycryptodome.readthedocs.io/en/latest/src/cipher/chacha20_poly1305.html
 # must have pycryptodome version 3.7.0 or higher installed
 
-import json
-import argparse
-
-from base64 import b64encode, b64decode
 from Crypto.Cipher import ChaCha20
 from Crypto.Cipher import ChaCha20_Poly1305
 from Crypto.Random import get_random_bytes
 
-# generates a random 256-bit key
+
+### generates a random 512-bit (64-byte) key
 def keygen_512bit():
 	key = get_random_bytes(64)
 	return key
 
-# takes bytes for all inputs, will return the bytes of the final packet to be sent over the wire
-def openssh_chacha20_poly1305_encrypt(key, pkt_seq_number, pkt_length, pkt_payload):
+
+### takes the plaintext payload (bytes), a key (bytes), and a sequence
+### number (bytes, int) and encrypts it into the OTW packet
+def openssh_chacha20_poly1305_encrypt(key, pkt_seq_number, pkt_payload):
+	pkt_length = len(pkt_payload).to_bytes(4, byteorder='big')
+
 	# if numeric fields are not bytes, convert them to bytes
 	if isinstance(pkt_seq_number, int):
-		pkt_seq_number = pkt_seq_number.to_bytes(8, byteorder='little')
-	if isinstance(pkt_length, int):
-		pkt_length = pkt_length.to_bytes(4, byteorder='little')
+		pkt_seq_number = pkt_seq_number.to_bytes(8, byteorder='big')
+
+	assert(len(pkt_length) == 4)
 	
 	# encrypt the packet length
-	cipher1 = ChaCha20.new(key=key[:32], nonce=pkt_seq_number)
+	cipher1 = ChaCha20.new(key=key[32:], nonce=pkt_seq_number)
 	encrypted_pkt_length = cipher1.encrypt(pkt_length)
 	
-	# encrypte the packet payload and generate a tag, using the encrypted packet length as AAD
-	cipher2 = ChaCha20_Poly1305.new(key=key[32:], nonce=pkt_seq_number)
+	# encrypt the packet payload and generate a tag, using the encrypted packet length as AAD
+	# TODO: The encrypted packet length is not the AAD, we cannot do this correctly until we know what it is
+	cipher2 = ChaCha20_Poly1305.new(key=key[:32], nonce=pkt_seq_number)
 	cipher2.update(encrypted_pkt_length)
 	encrypted_pkt_payload, tag = cipher2.encrypt_and_digest(pkt_payload)
 	
@@ -39,54 +41,47 @@ def openssh_chacha20_poly1305_encrypt(key, pkt_seq_number, pkt_length, pkt_paylo
 	return encrypted_pkt_length + encrypted_pkt_payload + tag
 
 
-# takes the bytes of the whole packet sent over the wire, 
+### takes the whole packet sent over the wire (bytes), decrypts it using
+### the given key (bytes) and sequence number (bytes, int) as a nonce
 def openssh_chacha20_poly1305_decrypt(key, pkt_seq_number, pkt):
 	# if numeric fields are not bytes, convert them to bytes
 	if isinstance(pkt_seq_number, int):
-		pkt_seq_number = pkt_seq_number.to_bytes(8, byteorder='little')
+		pkt_seq_number = pkt_seq_number.to_bytes(8, byteorder='big')
 	
 	# decrypt the packet length
-	cipher1 = ChaCha20.new(key=key[:32], nonce=pkt_seq_number)
+	cipher1 = ChaCha20.new(key=key[32:], nonce=pkt_seq_number)
 	pkt_length = cipher1.decrypt(pkt[:4])
 	
-	# decrypt and verify the packet payload and encrypted packet length
-	cipher2 = ChaCha20_Poly1305.new(key=key[32:], nonce=pkt_seq_number)
-	cipher2.update(pkt[:4])
-	pkt_payload = cipher2.decrypt_and_verify(pkt[4:-16], pkt[-16:])
+	# Temporary solution: decrypt the packet payload without verifying the tag
+	cipher2 = ChaCha20.new(key=key[:32], nonce=pkt_seq_number)
+	cipher2.seek(64)
+	pkt_payload = cipher2.decrypt(pkt[4:-16])
+	
+	# TODO: verify the tag and decrypt the packet payload
+	#cipher2 = ChaCha20_Poly1305.new(key=key[:32], nonce=pkt_seq_number)
+	#cipher2.update(pkt[:4])
+	#pkt_payload = cipher2.decrypt_and_verify(pkt[4:-16], pkt[-16:])
+	
+	assert(len(pkt_payload) == int.from_bytes(pkt_length, byteorder='big'))
 	
 	return pkt_payload
 
 
 
-# main function
-def main():
+### driver function
+payload = b"SSH Payload"
 
-	parser = argparse.ArgumentParser()
-	parser.add_argument("file", help="filename of packet to use (required)",type=str)
-	parser.add_argument("-m", "--mode", help="encryption or decryption",type=int)
-	args = parser.parse_args()
+seq_number = 1
+k = keygen_512bit()
 
-	try:
-		with open(args.file, mode='rb') as packet:
-			payload = packet.read()
-			payload_length = len(payload)
+otw_packet = openssh_chacha20_poly1305_encrypt(k, seq_number, payload)
 
-	except FileNotFoundError:
-		payload = b"Default SSH Payload"
-		payload_length = len(payload)
-	
-	seq_number = 1
-	k = keygen_512bit()
+print("OTW packet: ", end='')
+print(otw_packet)
 
-	otw_packet = openssh_chacha20_poly1305_encrypt(k, seq_number, payload_length, payload)
-	print(b64encode(otw_packet))
+decrypted_payload = openssh_chacha20_poly1305_decrypt(k, seq_number, otw_packet)
 
-	decrypted_payload = openssh_chacha20_poly1305_decrypt(k, seq_number, otw_packet)
-	print(decrypted_payload)
+print("Decrypted payload: ", end='')
+print(decrypted_payload)
 
-
-
-
-if __name__ == "__main__":
-	main()
-
+exit(0)
