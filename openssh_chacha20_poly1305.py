@@ -4,6 +4,7 @@
 # must have pycryptodome version 3.7.0 or higher installed
 
 import json
+import argparse
 
 from base64 import b64encode, b64decode
 from Crypto.Cipher import ChaCha20
@@ -57,19 +58,35 @@ def openssh_chacha20_poly1305_decrypt(key, pkt_seq_number, pkt):
 
 
 
-# driver function
-payload = b"SSH Payload"
-payload_length = len(payload)
+# main function
+def main():
 
-seq_number = 1
-k = keygen_512bit()
+	parser = argparse.ArgumentParser()
+	parser.add_argument("file", help="filename of packet to use (required)",type=str)
+	parser.add_argument("-m", "--mode", help="encryption or decryption",type=int)
+	args = parser.parse_args()
 
-otw_packet = openssh_chacha20_poly1305_encrypt(k, seq_number, payload_length, payload)
+	try:
+		with open(args.file, mode='rb') as packet:
+			payload = packet.read()
+			payload_length = len(payload)
 
-print(b64encode(otw_packet))
+	except FileNotFoundError:
+		payload = b"Default SSH Payload"
+		payload_length = len(payload)
+	
+	seq_number = 1
+	k = keygen_512bit()
 
-decrypted_payload = openssh_chacha20_poly1305_decrypt(k, seq_number, otw_packet)
+	otw_packet = openssh_chacha20_poly1305_encrypt(k, seq_number, payload_length, payload)
+	print(b64encode(otw_packet))
 
-print(decrypted_payload)
+	decrypted_payload = openssh_chacha20_poly1305_decrypt(k, seq_number, otw_packet)
+	print(decrypted_payload)
 
-exit(0)
+
+
+
+if __name__ == "__main__":
+	main()
+
