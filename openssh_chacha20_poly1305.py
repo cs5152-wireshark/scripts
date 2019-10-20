@@ -1,23 +1,21 @@
 #!/usr/bin/python
 
 # code examples inspired from https://pycryptodome.readthedocs.io/en/latest/src/cipher/chacha20_poly1305.html
-# must have pycryptodome version 3.7.0 or higher installed
 
 import json
 import argparse
 
+# types
 from typing import Tuple, Union, cast
+
+# io
 from io import BufferedReader
 from base64 import b64encode, b64decode
+
+# pycryptodom
 from Crypto.Cipher import ChaCha20
 from Crypto.Cipher import ChaCha20_Poly1305
 from Crypto.Random import get_random_bytes
-
-### generates a random 512-bit (64-byte) key
-def keygen_512bit() -> bytes:
-	key = get_random_bytes(64)
-	return key
-
 
 ### takes the plaintext payload (bytes), a key (bytes), and a sequence
 ### number (bytes, int) and encrypts it into the OTW packet
