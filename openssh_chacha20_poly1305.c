@@ -11,7 +11,53 @@
 // max number of lines, max characters per line
 enum { MAXL = 40, MAXC = 260 };
 
- 
+char* substring (const char* input, int offset, int len, char* dest)
+{
+  int input_len = strlen (input);
+  if (offset + len > input_len)
+  {
+     return NULL;
+  }
+  strncpy (dest, input + offset, len);
+  return dest;
+}
+
+uint8_t* datahex(char* string) {
+
+    if(string == NULL) 
+       return NULL;
+
+    size_t slength = strlen(string);
+    if((slength % 2) != 0) // must be even
+       return NULL;
+
+    size_t dlength = slength / 2;
+
+    uint8_t* data = malloc(dlength);
+    memset(data, 0, dlength);
+
+    size_t index = 0;
+    while (index < slength) {
+        char c = string[index];
+        int value = 0;
+        if(c >= '0' && c <= '9')
+          value = (c - '0');
+        else if (c >= 'A' && c <= 'F') 
+          value = (10 + (c - 'A'));
+        else if (c >= 'a' && c <= 'f')
+          value = (10 + (c - 'a'));
+        else {
+          free(data);
+          return NULL;
+        }
+
+        data[(index/2)] += value << (((index + 1) % 2) * 4);
+
+        index++;
+    }
+
+    return data;
+}
 
 int main(int argc, char *argv[])
 {
@@ -67,8 +113,8 @@ int main(int argc, char *argv[])
                 printf("\n");
             }
             strcpy(words[line_index][word_index], ptr);
-            printf("%s ", ptr);
-            //printf("'%s'\n", words[line_index][word_index]);
+            //printf("%s ", ptr);
+            printf("'%s'\n", words[line_index][word_index]);
             word_index ++;
             ptr = strtok(NULL, delim);
         }
@@ -76,21 +122,47 @@ int main(int argc, char *argv[])
 
     // STEP 3: Get the keys
     
-    int max = fmax(sizeof(words[0][1]), sizeof(words[1][1]));
+    int max = fmax(strlen(words[0][1]), strlen(words[1][1]));
     char char_key0[max];
     char char_key1[max];
 
-    for (int j = 11; j< max ; j++){
-        char_key0[j-11] = words[0][1][j];
-        char_key1[j-11] = words[1][1][j];
-    } 
+    substring(words[0][1], 11, strlen(words[0][1]), char_key0);
+    substring(words[1][1], 11, strlen(words[1][1]), char_key1);
 
-    int key0, key1;
-    key0 = atoi(char_key0);
-    key1 = atoi(char_key1);
+    // for (int j = 11; j< max ; j++){
+    //     char_key0[j-11] = words[0][1][j];
+    //     char_key1[j-11] = words[1][1][j];
+    // } 
+
+    uint8_t * key0; 
+    uint8_t * key1;
+    key0 = datahex(char_key0);
+    key1 = datahex(char_key1);
 
     printf("%s, %s\n", char_key0, char_key1);
-    //printf("%.2x, %.2x\n", char_key0, char_key1);
+    // https://github.com/Chronic-Dev/libgcrypt/blob/master/tests/basic.c
+
+    gcry_cipher_hd_t handle;
+    gcry_error_t err = 0;
+    unsigned char output[MAXL];
+
+    int block_length = gcry_cipher_get_algo_blklen(GCRY_CIPHER_CHACHA20);
+    int key_length = gcry_cipher_get_algo_keylen (GCRY_CIPHER_CHACHA20);
+
+    err = gcry_cipher_open (&handle, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_CTR, 0);
+    err = gcry_cipher_setkey (handle, key0, key_length);
+    //A 96-bit nonce.  In some protocols, this is known as the Initialization Vector
+    // gcry_create_nonce (handle, 96);
+    gcry_cipher_setiv (handle, NULL, 0);
+
+    // err = gcry_cipher_encrypt (handle,
+	// 			 output, block_length,
+	// 			 ,
+	// 			 );
+
+
+
+
 
     free(file);
 
