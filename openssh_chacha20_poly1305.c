@@ -11,18 +11,15 @@
 // max number of lines, max characters per line
 enum { MAXL = 40, MAXC = 260 };
 
-uint8_t* datahex(char* string) {
-
+unsigned char* datahex(char* string) {
     if(string == NULL) 
        return NULL;
-
     size_t slength = strlen(string);
     if((slength % 2) != 0) // must be even
        return NULL;
     size_t dlength = slength / 2;
-    uint8_t* data = malloc(dlength);
+    unsigned char* data = malloc(dlength);
     memset(data, 0, dlength);
-
     size_t index = 0;
     while (index < slength) {
         char c = string[index];
@@ -37,12 +34,9 @@ uint8_t* datahex(char* string) {
           free(data);
           return NULL;
         }
-
         data[(index/2)] += value << (((index + 1) % 2) * 4);
-
         index++;
     }
-
     return data;
 }
 
@@ -123,6 +117,8 @@ int main(int argc, char *argv[])
     uint8_t key0_first[32];
     memcpy(key0_first, key0, 32);
 
+
+
     // https://github.com/Chronic-Dev/libgcrypt/blob/master/tests/basic.c
 
     gcry_cipher_hd_t handle;
@@ -132,18 +128,31 @@ int main(int argc, char *argv[])
     int block_length = gcry_cipher_get_algo_blklen(GCRY_CIPHER_CHACHA20);
     int key_length = gcry_cipher_get_algo_keylen (GCRY_CIPHER_CHACHA20);
 
-    err = gcry_cipher_open (&handle, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_CTR, 0);
+    err = gcry_cipher_open (&handle, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_POLY1305, 0);
     err = gcry_cipher_setkey (handle, key0_first, key_length);
     
-    //A 96-bit nonce.  In some protocols, this is known as the Initialization Vector
-    // gcry_create_nonce (handle, 96);
+    //Create a 96-bit nonce.  In some protocols, this is known as the Initialization Vector
+    gcry_create_nonce (handle, 96);
     // gcry_cipher_setiv (handle, NULL, 0);
 
-    // err = gcry_cipher_encrypt (handle,
-	// 			 output, block_length,
-	// 			 plaintext goes here, length of plaintext goes here
-	// 			 );
+    // get plaintext length
+    char str_len_char[5];
+    strncpy(str_len_char, words[2][3] + 4, 5);
+    int str_length = atoi(str_len_char);
 
+    // get plaintext
+    int len = str_length * 2 + 40;
+    char plaintext[len + 1];
+    strncpy(plaintext, words[2][5]+4, len);
+    plaintext[len] = '\0';
+    unsigned char* plaintext_bytes = datahex(plaintext);
+
+    err = gcry_cipher_decrypt (handle,
+				 output, block_length, plaintext, str_length + 20);
+    printf("err: %i\n", err);
+
+    printf("len: %i src: %s\n", str_length, plaintext);
+    printf("len: %i str: %x%x%x%x%x\n", str_length, output[0],output[1],output[2],output[3],output[4]);
 
     free(file);
 
