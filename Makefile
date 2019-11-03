@@ -1,6 +1,6 @@
 CC = gcc
 FLAGS = -g -Wall
-LIBDEPS = -lgcrypt -lmath
+LIBDEPS = $(shell pkg-config --cflags --libs libgcrypt)
 ARGS = sample_dump.txt
 
 openssh_chacha20_poly1305: openssh_chacha20_poly1305.c
