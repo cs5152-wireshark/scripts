@@ -123,12 +123,11 @@ int main(int argc, char *argv[])
 
     gcry_cipher_hd_t handle;
     gcry_error_t err = 0;
-    unsigned char output[MAXL];
 
     int block_length = gcry_cipher_get_algo_blklen(GCRY_CIPHER_CHACHA20);
     int key_length = gcry_cipher_get_algo_keylen (GCRY_CIPHER_CHACHA20);
 
-    err = gcry_cipher_open (&handle, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_POLY1305, 0);
+    err = gcry_cipher_open (&handle, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_STREAM, 0);
     err = gcry_cipher_setkey (handle, key0_first, key_length);
     
     //Create a 96-bit nonce.  In some protocols, this is known as the Initialization Vector
@@ -146,9 +145,14 @@ int main(int argc, char *argv[])
     strncpy(plaintext, words[2][5]+4, len);
     plaintext[len] = '\0';
     unsigned char* plaintext_bytes = datahex(plaintext);
+    unsigned char output_len[4];
+    err = gcry_cipher_decrypt (handle,
+				 output_len, 4, plaintext_bytes, 8);
+
+    unsigned char output[MAXL];
 
     err = gcry_cipher_decrypt (handle,
-				 output, block_length, plaintext, str_length + 20);
+				 output, block_length, plaintext_bytes + 4, str_length + 20);
     printf("err: %i\n", err);
 
     printf("len: %i src: %s\n", str_length, plaintext);
