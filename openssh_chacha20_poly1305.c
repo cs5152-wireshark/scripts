@@ -49,6 +49,9 @@
 	
 typedef unsigned char byte_t;
 
+// forward declarations
+void test1();
+
 // max number of lines, max characters per line
 enum { MAXL = 40, MAXC = 260 };
 
@@ -81,39 +84,93 @@ unsigned char* datahex(char* string) {
     return data;
 }
 
-int openssh_chacha20_poly1305_decrypt(const byte_t *key, uint64_t pkt_seq_number, const byte_t *encrypted_pkt, byte_t *out) {
+/* This function takes a 512-bit key, a sequence number, and a packet payload+length
+ * and encrypts it into an OpenSSH packet to be sent over the wire which it stores in
+ * the outbuf buffer. It will return the gcrypt error codes.
+ */
+gcry_error_t
+openssh_chacha20_poly1305_encrypt(const byte_t *key, uint64_t pkt_seq_number, const byte_t *pkt_payload, uint32_t pkt_payload_len, byte_t *outbuf) {
+	// cipher1 encrypts packet length, cipher2 encrypts packet payload
+	gcry_cipher_hd_t cipher1, cipher2;
+	gcry_error_t err = 0;
+	
+	// split the 512-bit key into two 256-bit keys (K1 and K2)
 	byte_t k1[32];
 	byte_t k2[32];
-	
-	byte_t seqbuf[8];
-	POKE_U64(seqbuf, pkt_seq_number);
-	
-	byte_t lenbuf[4];
-	uint32_t payload_len = 0;
-	
 	memcpy(k1, (key + 32), 32);
 	memcpy(k2, key, 32);
 	
+	// convert the sequence number from 64-bit unsigned int to 64-bit big endian byte array
+	byte_t seqbuf[8];
+	POKE_U64(seqbuf, pkt_seq_number);
+	
+	// convert packet payload length from 32-bit unsigned int to 32-bit big endian byte array
+	byte_t lenbuf[4];
+	POKE_U32(lenbuf, pkt_payload_len);
+
+	// encrypt packet length
+	err = gcry_cipher_open (&cipher1, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_STREAM, 0);
+	err = gcry_cipher_setkey(cipher1, k1, 32);
+	err = gcry_cipher_setiv(cipher1, seqbuf, 8);
+	err = gcry_cipher_encrypt(cipher1, outbuf, 4, lenbuf, 4);
+	
+	// encrypt packet payload
+	err = gcry_cipher_open (&cipher2, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_STREAM, 0);
+	err = gcry_cipher_setkey(cipher2, k2, 32);
+	err = gcry_cipher_setiv(cipher2, seqbuf, 8);
+	err = gcry_cipher_encrypt(cipher2, (outbuf + 4), pkt_payload_len, pkt_payload, pkt_payload_len);
+	
+	return err;
+}
+
+/* This function takes a 512-bit key, a sequence number, and an encrypted packet+length
+ * and decrypts it into the packet payload which it stores in the outbuf buffer. It will
+ * return the gcrypt error codes.
+ */
+gcry_error_t
+openssh_chacha20_poly1305_decrypt(const byte_t *key, uint64_t pkt_seq_number, const byte_t *encrypted_pkt, uint32_t encrypted_pkt_len, byte_t *outbuf) {
 	// cipher1 decrypts packet length header, cipher2 decrypts packet payload
 	gcry_cipher_hd_t cipher1, cipher2;
     gcry_error_t err = 0;
+
+	// split the 512-bit key into two 256-bit keys (K1 and K2)
+	byte_t k1[32];
+	byte_t k2[32];
+	memcpy(k1, (key + 32), 32);
+	memcpy(k2, key, 32);
 	
-	// decrypt packet length
+	// convert the sequence number from 64-bit unsigned int to 64-bit big endian byte array
+	byte_t seqbuf[8];
+	POKE_U64(seqbuf, pkt_seq_number);
+	
+	// set up variables for reading packet payload length
+	byte_t lenbuf[4];
+	uint32_t payload_len;
+	
+	// decrypt packet payload length and convert it from 32-bit big endian byte array to 32-bit unsigned int
 	err = gcry_cipher_open (&cipher1, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_STREAM, 0);
 	err = gcry_cipher_setkey(cipher1, k1, 32);
 	err = gcry_cipher_setiv(cipher1, seqbuf, 8);
 	err = gcry_cipher_decrypt(cipher1, lenbuf, 4, encrypted_pkt, 4);
 	payload_len = PEEK_U32(lenbuf);
 	
-	// decrypt packet payload
+	// ensure that the length field is accurate
+	if(payload_len + 20 != encrypted_pkt_len) {
+		err |= GPG_ERR_CONFLICT;
+		return err;
+	};
+	
+	// decrypt packet payload and store the output in out
 	err = gcry_cipher_open (&cipher2, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_STREAM, 0);
 	err = gcry_cipher_setkey(cipher2, k2, 32);
 	err = gcry_cipher_setiv(cipher2, seqbuf, 8);
-	err = gcry_cipher_decrypt(cipher2, out, payload_len, encrypted_pkt + 4, payload_len);
-	/*
+	err = gcry_cipher_decrypt(cipher2, outbuf, payload_len, encrypted_pkt + 4, payload_len);
+
+	/* TODO: Verify the MAC tag before we decrypt the packet payload
 	err = gcry_cipher_open (&cipher2, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_POLY1305, 0);
 	err = gcry_cipher_setkey(cipher2, k2, 32);
 	err = gcry_cipher_setiv(cipher2, seqbuf, 8);
+	err = gcry_cipher_checktag(cipher2, tagbuf, 16);
 	err = gcry_cipher_decrypt(cipher2, lenbuf, 4, encrypted_pkt, 4);
 	*/
 	
@@ -130,82 +187,84 @@ int main(int argc, char *argv[])
 {
     // STEP 1: Read in the input file
 
-    FILE *fpr;
-    char (*file)[MAXC] = NULL; // pointer to array of type char [MAXC]
-    int i,n = 0;
+//     FILE *fpr;
+//     char (*file)[MAXC] = NULL; // pointer to array of type char [MAXC]
+//     int i,n = 0;
+// 
+//     // Char pointer for delimited string
+//     char *ptr;
+//     // current line
+//     int line = 0;
+//     /*Opening the input file in "r" mode*/
+//     fpr = fopen(argv[1], "r");
+// 
+//     /* check if input file is valid */
+//     if (fpr == NULL) {
+// 		puts("invalid input file");
+// 		return 0;
+// 	}
+//     if (!(file = malloc (MAXL * sizeof *file))) { /* allocate MAXL arrays */
+//         fprintf (stderr, "error: virtual memory exhausted.\n");
+//         return 0;
+//     }
+// 
+//     while (n < MAXL && fgets (file[n], MAXC, fpr)) { /* read each line */
+//         char *p = file[n];                  /* assign pointer */
+//         for (; *p && *p != '\n'; p++) {}     /* find 1st '\n'  */
+//         *p = 0, n++;                         /* nul-termiante  */
+//     }
+// 
+//     if (fpr != stdin) fclose (fpr);   /* close file if not stdin */
+//     // for (i = 0; i < n; i++) printf ("%s\n", file[i]);
+//     int length = sizeof(file);
+// 
+//     // STEP 2: File tokenizing
+//     int line_index = -1;
+//     int word_index = 0;
+//     // 10 rows of 10 split words of max len 260 characters
+//     char words[10][10][260];
+//     for (int i = 0; i < length; i++) {
+//         char *line = file[i];
+//         int init_size = sizeof(line);
+//         char delim[] = "|";
+// 
+//         char *ptr = strtok(line, delim);
+// 
+//         while(ptr != NULL)
+//         {
+//             //printf("'%s'\n", ptr);
+//             if (ptr[0] == 'd') {
+//                 line_index ++ ;
+//                 word_index = 0;
+//                // printf("\n");
+//             }
+//             strcpy(words[line_index][word_index], ptr);
+//             //printf("%s ", ptr);
+//             //printf("'%s'\n", words[line_index][word_index]);
+//             word_index ++;
+//             ptr = strtok(NULL, delim);
+//         }
+//     }
+// 
+//     // STEP 3: Get the keys
+//     
+//     byte_t char_key0[139];
+//     byte_t char_key1[139];
+// 
+//     strncpy(char_key0, words[0][1]+11, 128);
+//     strncpy(char_key1, words[1][1]+11, 128);
+// 
+//     uint8_t * key0; 
+//     uint8_t * key1;
+// 
+//     key0 = datahex(char_key0);
+//     key1 = datahex(char_key1);
+// 
+//     uint8_t key0_first[32];
+//     memcpy(key0_first, key0, 32);
 
-    // Char pointer for delimited string
-    char *ptr;
-    // current line
-    int line = 0;
-    /*Opening the input file in "r" mode*/
-    fpr = fopen(argv[1], "r");
-
-    /* check if input file is valid */
-    if (fpr == NULL) {
-		puts("invalid input file");
-		return 0;
-	}
-    if (!(file = malloc (MAXL * sizeof *file))) { /* allocate MAXL arrays */
-        fprintf (stderr, "error: virtual memory exhausted.\n");
-        return 0;
-    }
-
-    while (n < MAXL && fgets (file[n], MAXC, fpr)) { /* read each line */
-        char *p = file[n];                  /* assign pointer */
-        for (; *p && *p != '\n'; p++) {}     /* find 1st '\n'  */
-        *p = 0, n++;                         /* nul-termiante  */
-    }
-
-    if (fpr != stdin) fclose (fpr);   /* close file if not stdin */
-    // for (i = 0; i < n; i++) printf ("%s\n", file[i]);
-    int length = sizeof(file);
-
-    // STEP 2: File tokenizing
-    int line_index = -1;
-    int word_index = 0;
-    // 10 rows of 10 split words of max len 260 characters
-    char words[10][10][260];
-    for (int i = 0; i < length; i++) {
-        char *line = file[i];
-        int init_size = sizeof(line);
-        char delim[] = "|";
-
-        char *ptr = strtok(line, delim);
-
-        while(ptr != NULL)
-        {
-            //printf("'%s'\n", ptr);
-            if (ptr[0] == 'd') {
-                line_index ++ ;
-                word_index = 0;
-               // printf("\n");
-            }
-            strcpy(words[line_index][word_index], ptr);
-            //printf("%s ", ptr);
-            //printf("'%s'\n", words[line_index][word_index]);
-            word_index ++;
-            ptr = strtok(NULL, delim);
-        }
-    }
-
-    // STEP 3: Get the keys
-    
-    byte_t char_key0[139];
-    byte_t char_key1[139];
-
-    strncpy(char_key0, words[0][1]+11, 128);
-    strncpy(char_key1, words[1][1]+11, 128);
-
-    uint8_t * key0; 
-    uint8_t * key1;
-
-    key0 = datahex(char_key0);
-    key1 = datahex(char_key1);
-
-    uint8_t key0_first[32];
-    memcpy(key0_first, key0, 32);
-
+	
+	test1();
 
     // https://github.com/Chronic-Dev/libgcrypt/blob/master/tests/basic.c
 /*
@@ -252,40 +311,25 @@ int main(int argc, char *argv[])
 }
 
 void test1() {
-	gcry_cipher_hd_t cipher1, cipher2;
 	gcry_error_t err;
 
+	// hardcoded 512-bit key
 	const byte_t key[64] = "\x94\x20\x9c\x70\xe1\xdc\x08\xdd\x70\x2d\x69\x18\xe9\x75\x57\xec\x28\x4f\x5d\xa9\xdd\x47\x65\x4f\x48\x42\xe7\xe6\x71\xa5\xba\xea\x7f\x58\x27\x30\xbf\xcd\xf4\x34\x66\xee\xaa\x00\x05\x1c\x28\x58\x6d\xe3\x39\x96\x15\xc5\x42\xdb\xbd\xb8\x0f\xa9\x0e\x7c\x18\x2d";
 	
+	// hardcoded sequence number
 	const uint64_t seqnum = 1;
-	const byte_t seqbuf[8];
-	POKE_U64(seqbuf, seqnum);
 	
+	// hardcoded payload+length
 	const byte_t payload[8] = "Hello!\n\0";
 	const uint32_t payload_len = sizeof(payload);
-	const byte_t lenbuf[4];
-	POKE_U32(lenbuf, payload_len);
 	
-	byte_t k1[32];
-	byte_t k2[32];
-	memcpy(k1, (key + 32), 32);
-	memcpy(k2, key, 32);
-
-	byte_t encrypted_pkt[payload_len + 20];
-	memset(encrypted_pkt, '\0', sizeof(encrypted_pkt));
+	// prepare a buffer to store the encrypted packet
+	const uint32_t encrypted_pkt_len = payload_len + 20;
+	byte_t encrypted_pkt[encrypted_pkt_len];
+	memset(encrypted_pkt, '\0', encrypted_pkt_len);
 	
-	// encrypt packet length
-	err = gcry_cipher_open (&cipher1, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_STREAM, 0);
-	err = gcry_cipher_setkey(cipher1, k1, 32);
-	err = gcry_cipher_setiv(cipher1, seqbuf, 8);
-	err = gcry_cipher_encrypt(cipher1, encrypted_pkt, 4, lenbuf, 4);
-	
-	// encrypt packet payload
-	err = gcry_cipher_open (&cipher2, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_STREAM, 0);
-	err = gcry_cipher_setkey(cipher2, k2, 32);
-	err = gcry_cipher_setiv(cipher2, seqbuf, 8);
-	err = gcry_cipher_encrypt(cipher2, (encrypted_pkt + 4), payload_len, payload, payload_len);
-
+	// Encrypt the packet
+	err = openssh_chacha20_poly1305_encrypt(key, seqnum, payload, payload_len, encrypted_pkt);
 	if(err != 0) {
 		printf("Error: %d", err);
 		exit(1);
@@ -294,10 +338,11 @@ void test1() {
 	printf("Encrypted Packet: ");
 	printhex(encrypted_pkt, sizeof(encrypted_pkt));
 	
+	// prepare a buffer to store the decrypted packet
 	byte_t decrypted_payload[payload_len];	
 	
-	// Test the decrypt function
-	err = openssh_chacha20_poly1305_decrypt(key, seqnum, encrypted_pkt, decrypted_payload);
+	// Decrypt the packet
+	err = openssh_chacha20_poly1305_decrypt(key, seqnum, encrypted_pkt, encrypted_pkt_len, decrypted_payload);
 	if(err != 0) {
 		printf("Error: %d", err);
 		exit(1);
