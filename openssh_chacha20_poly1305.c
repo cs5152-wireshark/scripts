@@ -51,6 +51,7 @@ typedef unsigned char byte_t;
 
 // forward declarations
 void test1();
+void test2();
 
 // max number of lines, max characters per line
 enum { MAXL = 40, MAXC = 260 };
@@ -113,11 +114,17 @@ openssh_chacha20_poly1305_encrypt(const byte_t *key, uint64_t pkt_seq_number, co
 	err = gcry_cipher_setkey(cipher1, k1, 32);
 	err = gcry_cipher_setiv(cipher1, seqbuf, 8);
 	err = gcry_cipher_encrypt(cipher1, outbuf, 4, lenbuf, 4);
+
+	//set initial block count to 1
+	const byte_t ctrbuf[8] = { 1, 0, 0, 0, 0, 0, 0, 0 };
+	byte_t ctrseqbuf[16];
+	memcpy(ctrseqbuf, ctrbuf, 8);
+	memcpy(ctrseqbuf + 8, seqbuf, 8);
 	
 	// encrypt packet payload
 	err = gcry_cipher_open (&cipher2, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_STREAM, 0);
 	err = gcry_cipher_setkey(cipher2, k2, 32);
-	err = gcry_cipher_setiv(cipher2, seqbuf, 8);
+	err = gcry_cipher_setiv(cipher2, ctrseqbuf, 16); // pass in both the initial block counter and initialization vector
 	err = gcry_cipher_encrypt(cipher2, (outbuf + 4), pkt_payload_len, pkt_payload, pkt_payload_len);
 	
 	return err;
@@ -156,14 +163,20 @@ openssh_chacha20_poly1305_decrypt(const byte_t *key, uint64_t pkt_seq_number, co
 	
 	// ensure that the length field is accurate
 	if(payload_len + 20 != encrypted_pkt_len) {
-		err |= GPG_ERR_CONFLICT;
+		err |= GPG_ERR_USER_1;
 		return err;
 	};
+	
+	//set initial block count to 1
+	const byte_t ctrbuf[8] = { 1, 0, 0, 0, 0, 0, 0, 0 };
+	byte_t ctrseqbuf[16];
+	memcpy(ctrseqbuf, ctrbuf, 8);
+	memcpy(ctrseqbuf + 8, seqbuf, 8);
 	
 	// decrypt packet payload and store the output in out
 	err = gcry_cipher_open (&cipher2, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_STREAM, 0);
 	err = gcry_cipher_setkey(cipher2, k2, 32);
-	err = gcry_cipher_setiv(cipher2, seqbuf, 8);
+	err = gcry_cipher_setiv(cipher2, ctrseqbuf, 16); // pass in both the initial block counter and initialization vector
 	err = gcry_cipher_decrypt(cipher2, outbuf, payload_len, encrypted_pkt + 4, payload_len);
 
 	/* TODO: Verify the MAC tag before we decrypt the packet payload
@@ -310,6 +323,7 @@ int main(int argc, char *argv[])
     return 0;
 }
 
+// This test uses the encrypt function with some random hardcoded key
 void test1() {
 	gcry_error_t err;
 
@@ -352,5 +366,48 @@ void test1() {
 	printhex(decrypted_payload, sizeof(decrypted_payload));
 	
 	printf("\nPayload text:\n%s\n", decrypted_payload);
+	return;
+}
+
+// This test uses a real packet
+void test2() {
+	gcry_error_t err;
+
+	// 512-bit key
+	const byte_t key[64] = "\xe5\x8b\x6e\xe1\xba\xad\x11\x07\x5f\x55\xea\xd3\x9c\x8c\xa4\x62\xa9\xc9\xef\x9a\x4b\xcc\xfa\x1d\x5d\x1b\x4b\x88\x52\x24\xb3\x22\x42\xd1\xb3\xc6\xe1\x5e\x57\xd4\x3b\x30\x59\x7b\x3b\xf6\x95\xe6\xe0\xd4\xd7\xba\x61\x58\x28\xeb\x2b\xdd\x6e\xe7\x97\x5b\xae\x77";
+	//const byte_t key[64] = "\xba\x91\x1c\x69\xcb\xcb\xab\x6e\x85\x4a\x21\xb6\x1f\x7d\x21\x4a\xff\xd9\x28\x43\x03\x19\x95\x92\x70\x08\x2b\x22\xe9\x1f\x8c\xa6\x4f\xb8\xa5\x34\x82\x4f\x65\x33\x19\x19\x7c\xd5\x51\xc7\xdb\x37\x01\xac\x1c\x9b\x6b\x13\x07\x34\x93\xa6\xc8\xe9\xa2\xdf\xc2\x7a";
+	
+	// sequence number
+	const uint64_t seqnum = 20;
+	//const uint64_t seqnum = 15;
+	
+	// hardcoded payload+length
+	const byte_t encrypted_pkt[100] = "\x63\x4a\xd1\xc3\xe3\x27\x58\x69\xd8\x22\xcb\x7d\xcd\x1f\x69\xd8\x2e\xb9\x58\xea\x0b\x18\x38\x55\x8d\x23\xc8\xd8\x41\x19\xa7\x37\x42\x34\xae\xb6\x95\x22\x6a\x89\x6a\x0f\xda\x64\x6b\x3d\x3f\xa9\xa9\x5a\xf4\xba\x19\xba\xb4\xe1\xe5\x77\x5b\x13\x8f\xa9\xb2\xee\x46\x8a\x15\xa3\xe4\x4b\x73\xd5\xe9\x2e\xf8\x4a\x26\x5a\x81\x19\x44\x4b\xad\x22\x14\xcf\xd3\xdb\x84\x94\x5c\x86\x71\xe5\x40\xe7\xaa\xd4\xa5\x47";
+	//const byte_t encrypted_pkt[36] = "\x00\x00\x00\x10\x05\x5e\x00\x00\x00\x00\x00\x00\x00\x01\x0d\x68\x6f\xc7\x51\xbd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+	const uint32_t encrypted_pkt_len = sizeof(encrypted_pkt);
+	
+	printf("Encrypted Packet: ");
+	printhex(encrypted_pkt, encrypted_pkt_len);
+	
+	// prepare a buffer to store the decrypted packet
+	byte_t decrypted_payload[encrypted_pkt_len - 20];
+	
+	// Decrypt the packet
+	err = openssh_chacha20_poly1305_decrypt(key, seqnum, encrypted_pkt, encrypted_pkt_len, decrypted_payload);
+	if(err != 0) {
+		printf("Error: %s\n", gcry_strerror(err));
+		exit(1);
+	}
+
+	printf("Payload: ");
+	printhex(decrypted_payload, sizeof(decrypted_payload));
+	
+	printf("\nPayload text:\n", decrypted_payload);
+	
+	for(int i = 0; i < sizeof(decrypted_payload); ++i) {
+		printf("%c", decrypted_payload[i]);
+	}
+	printf("\n");
+	
 	return;
 }
